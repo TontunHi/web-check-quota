@@ -39,7 +39,7 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen flex items-center justify-center p-6 bg-[#0f1012]">
       <div className="w-full max-w-[380px] bg-[#16181b] border border-white/[0.08] rounded-2xl p-6">
-        <div className="flex items-center gap-2.5 mb-6">
+        <div className="flex items-center gap-2 mb-6">
           <span className="w-2 h-2 rounded-full bg-[#34d399]" />
           <span className="text-[15px] font-medium text-[#f3f4f6]">
             Cockpit Telemetry
@@ -49,7 +49,7 @@ export default function LoginPage() {
         <h1 className="text-[20px] font-medium text-[#f3f4f6] mb-1">
           ยืนยันตัวตนเข้าใช้งาน
         </h1>
-        <p className="text-[13px] text-[#9ca3af] mb-6">
+        <p className="text-[13px] text-[#b4bac4] mb-6">
           แดชบอร์ดติดตามโควต้าส่วนตัวสำหรับ Antigravity, Codex และ Claude
         </p>
 
@@ -57,7 +57,7 @@ export default function LoginPage() {
           <div>
             <label
               htmlFor="password"
-              className="block text-[13px] text-[#9ca3af] mb-2"
+              className="block text-[13px] text-[#b4bac4] mb-2"
             >
               รหัสผ่านผู้ดูแล (ADMIN_PASSWORD)
             </label>
@@ -65,7 +65,7 @@ export default function LoginPage() {
               <KeyRound
                 size={16}
                 strokeWidth={1.5}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7280]"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8b93a1]"
               />
               <input
                 id="password"
@@ -75,7 +75,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="กรอกรหัสผ่าน"
-                className="w-full h-10 pl-9 pr-3 rounded-lg bg-[#0f1012] border border-white/[0.08] text-[14px] text-[#f3f4f6] placeholder:text-[#6b7280] focus:outline-none focus:border-[#38bdf8] transition-colors"
+                className="w-full h-10 pl-9 pr-3 rounded-lg bg-[#0f1012] border border-white/[0.08] text-[14px] text-[#f3f4f6] placeholder:text-[#8b93a1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8]/70 transition-colors"
               />
             </div>
           </div>
@@ -89,7 +89,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading || !password.trim()}
-            className="w-full h-10 rounded-lg bg-[#f3f4f6] text-[#0f1012] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-white disabled:opacity-50 transition-colors"
+            className="w-full h-10 rounded-lg bg-[#f3f4f6] text-[#0f1012] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8]/70 transition-colors"
           >
             <span>{loading ? 'กำลังตรวจสอบ...' : 'เข้าสู่แดชบอร์ด'}</span>
             {!loading && <ArrowRight size={16} strokeWidth={1.5} />}
