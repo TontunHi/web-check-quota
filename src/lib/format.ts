@@ -1,4 +1,11 @@
-import type { PlatformId, PublicAccount } from './types';
+import type { AccountHealth, PlatformId, PublicAccount } from './types';
+import {
+  getDisplayQuotaItems,
+  PLATFORM_WAKEUP_DEFAULTS,
+  PLATFORM_WAKEUP_PRESETS,
+} from './models';
+
+export const LOW_QUOTA_THRESHOLD = 20;
 
 export const PLATFORM_META: Record<
   PlatformId,
@@ -7,30 +14,20 @@ export const PLATFORM_META: Record<
   antigravity: {
     label: 'Antigravity',
     dotColor: '#38bdf8',
-    defaultWakeupModel: 'gemini-3-flash',
-    wakeupModels: [
-      'gemini-3-flash',
-      'claude-sonnet-4-6',
-      'gemini-3-flash + claude-sonnet-4-6',
-      'gemini-2.5-pro',
-      'claude-opus-4-6-thinking',
-    ],
+    defaultWakeupModel: PLATFORM_WAKEUP_DEFAULTS.antigravity,
+    wakeupModels: [...PLATFORM_WAKEUP_PRESETS.antigravity],
   },
   codex: {
     label: 'Codex',
     dotColor: '#34d399',
-    defaultWakeupModel: 'gpt-5-codex',
-    wakeupModels: ['gpt-5-codex', 'gpt-5', 'codex-mini-latest', 'gpt-4.1-mini'],
+    defaultWakeupModel: PLATFORM_WAKEUP_DEFAULTS.codex,
+    wakeupModels: [...PLATFORM_WAKEUP_PRESETS.codex],
   },
   claude: {
     label: 'Claude',
     dotColor: '#fbbf24',
-    defaultWakeupModel: 'claude-haiku-4-5-20251001',
-    wakeupModels: [
-      'claude-haiku-4-5-20251001',
-      'claude-sonnet-4-5',
-      'claude-sonnet-4-20250514',
-    ],
+    defaultWakeupModel: PLATFORM_WAKEUP_DEFAULTS.claude,
+    wakeupModels: [...PLATFORM_WAKEUP_PRESETS.claude],
   },
 };
 
@@ -52,6 +49,19 @@ export function formatResetCountdown(resetAt?: string | null): string {
   return `อีก ${mins} นาที`;
 }
 
+export function formatExactResetTime(resetAt?: string | null): string {
+  if (!resetAt) return '';
+  const target = new Date(resetAt);
+  if (!Number.isFinite(target.getTime())) return '';
+  return new Intl.DateTimeFormat('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(target);
+}
+
 export function formatRelativeTime(iso?: string | null): string {
   if (!iso) return 'ยังไม่เคยอัปเดต';
   const ts = new Date(iso).getTime();
@@ -67,16 +77,52 @@ export function formatRelativeTime(iso?: string | null): string {
 }
 
 export function getLowestRemainingPercent(account: PublicAccount): number | null {
-  const items = account.quota?.items;
-  if (!items || items.length === 0) return null;
+  const items = getDisplayQuotaItems(account);
+  if (items.length === 0) return null;
   return items.reduce(
     (min, item) => Math.min(min, item.remainingPercent),
     items[0].remainingPercent
   );
 }
 
+export function getSoonestResetMs(account: PublicAccount): number | null {
+  const items = getDisplayQuotaItems(account);
+  let minMs: number | null = null;
+  for (const item of items) {
+    if (!item.resetAt) continue;
+    const ts = Date.parse(item.resetAt);
+    if (!Number.isFinite(ts)) continue;
+    minMs = minMs === null ? ts : Math.min(minMs, ts);
+  }
+  return minMs;
+}
+
+export function classifyAccountHealth(account: PublicAccount): AccountHealth {
+  if (
+    account.status === 'forbidden' ||
+    account.status === 'error' ||
+    Boolean(account.quota?.forbidden) ||
+    Boolean(account.lastError?.trim())
+  ) {
+    return 'issue';
+  }
+  const minPct = getLowestRemainingPercent(account);
+  if (
+    minPct !== null ? minPct <= LOW_QUOTA_THRESHOLD : account.status === 'warning'
+  ) {
+    return 'low';
+  }
+  return 'healthy';
+}
+
 export function quotaBarColor(percent: number): string {
   if (percent <= 15) return 'bg-[#f87171]';
   if (percent <= 35) return 'bg-[#fbbf24]';
   return 'bg-[#34d399]';
+}
+
+export function quotaTextColor(percent: number): string {
+  if (percent <= 15) return 'text-[#f87171]';
+  if (percent <= 35) return 'text-[#fbbf24]';
+  return 'text-[#34d399]';
 }

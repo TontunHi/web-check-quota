@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { QuotaItem, QuotaSnapshot, StoredCredentials } from '../types';
+import type { AvailableModel, QuotaItem, QuotaSnapshot, StoredCredentials } from '../types';
+import {
+  getClaudeCatalogForPlan,
+  normalizeClaudeWakeupModel,
+  parseAnthropicModelsList,
+} from '../models';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const AUTH_URL = 'https://claude.com/cai/oauth/authorize';
@@ -295,6 +300,11 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
     if (!res.ok && res.status !== 404) {
       throw new Error(`ตรวจสอบ Claude API Key ไม่สำเร็จ (${res.status})`);
     }
+    const liveModels = res.ok
+      ? parseAnthropicModelsList(await res.json().catch(() => null))
+      : [];
+    const availableModels =
+      liveModels.length > 0 ? liveModels : getClaudeCatalogForPlan('API KEY');
     return {
       credentials: creds,
       credentialsChanged: false,
@@ -307,6 +317,7 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
             detail: baseUrl,
           },
         ],
+        availableModels,
         plan: 'API KEY',
         fetchedAt: new Date().toISOString(),
       },
@@ -433,6 +444,7 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
       credentialsChanged: changed,
       quota: {
         items,
+        availableModels: getClaudeCatalogForPlan(null),
         plan: null,
         fetchedAt: new Date().toISOString(),
       },
@@ -475,6 +487,7 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
     seven_day?: { utilization?: number; resets_at?: unknown };
     seven_day_sonnet?: { utilization?: number; resets_at?: unknown };
     seven_day_sonnet_4?: { utilization?: number; resets_at?: unknown };
+    seven_day_opus?: { utilization?: number; resets_at?: unknown };
     extra_usage?: {
       is_enabled?: boolean;
       utilization?: number;
@@ -484,7 +497,10 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
     };
   };
 
-  const profile = await fetchClaudeOAuthProfile(nextCreds.accessToken!);
+  const [profile, liveModels] = await Promise.all([
+    fetchClaudeOAuthProfile(nextCreds.accessToken!),
+    fetchClaudeOAuthModels(nextCreds.accessToken!),
+  ]);
   const items: QuotaItem[] = [];
 
   if (raw.five_hour) {
@@ -515,6 +531,15 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
     });
   }
 
+  if (raw.seven_day_opus) {
+    items.push({
+      key: 'window:7d_opus',
+      label: '7d Opus Quota',
+      remainingPercent: remainingFromUtilization(raw.seven_day_opus.utilization),
+      resetAt: parseResetIso(raw.seven_day_opus.resets_at),
+    });
+  }
+
   let creditsText: string | null = null;
   if (raw.extra_usage?.is_enabled) {
     const usedUsd = ((raw.extra_usage.used_credits ?? 0) / 100).toFixed(2);
@@ -522,17 +547,38 @@ export async function fetchClaudeQuota(creds: StoredCredentials): Promise<{
     creditsText = `Extra Usage: $${usedUsd} / $${limitUsd}`;
   }
 
+  const availableModels =
+    liveModels.length > 0 ? liveModels : getClaudeCatalogForPlan(profile.plan);
+
   return {
     credentials: nextCreds,
     credentialsChanged: changed,
     quota: {
       items,
+      availableModels,
       plan: profile.plan ?? null,
       creditsText,
       forbidden: false,
       fetchedAt: new Date().toISOString(),
     },
   };
+}
+
+async function fetchClaudeOAuthModels(accessToken: string): Promise<AvailableModel[]> {
+  try {
+    const modelsRes = await fetch('https://api.anthropic.com/v1/models', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': OAUTH_BETA,
+        'User-Agent': COCKPIT_UA,
+      },
+    });
+    if (!modelsRes.ok) return [];
+    return parseAnthropicModelsList(await modelsRes.json().catch(() => null));
+  } catch {
+    return [];
+  }
 }
 
 export async function wakeupClaude(
@@ -544,7 +590,7 @@ export async function wakeupClaude(
   credentials: StoredCredentials;
   quota: QuotaSnapshot;
 }> {
-  const model = preferredModel?.trim() || 'claude-haiku-4-5-20251001';
+  const model = normalizeClaudeWakeupModel(preferredModel);
 
   if (creds.authType === 'api_key' || creds.apiKey) {
     const baseUrl = (creds.baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');

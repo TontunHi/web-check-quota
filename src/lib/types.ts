@@ -1,4 +1,17 @@
 export type PlatformId = 'antigravity' | 'codex' | 'claude';
+export type ModelFamily = 'gemini' | 'claude' | 'openai' | 'other';
+export type AccountHealth = 'healthy' | 'low' | 'issue';
+
+export interface AvailableModel {
+  id: string;
+  displayName: string;
+  family: ModelFamily;
+  remainingPercent?: number | null;
+  resetAt?: string | null;
+  recommended?: boolean;
+  reasoningEfforts?: string[];
+  source?: 'live' | 'catalog';
+}
 
 export interface QuotaItem {
   key: string;
@@ -11,6 +24,7 @@ export interface QuotaItem {
 
 export interface QuotaSnapshot {
   items: QuotaItem[];
+  availableModels?: AvailableModel[];
   plan?: string | null;
   creditsText?: string | null;
   forbidden?: boolean;

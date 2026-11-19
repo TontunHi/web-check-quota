@@ -1,5 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { QuotaItem, QuotaSnapshot, StoredCredentials } from '../types';
+import {
+  getCodexCatalogForPlan,
+  normalizeCodexWakeupModel,
+  parseOpenAiModelsList,
+} from '../models';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTH_URL = 'https://auth.openai.com/oauth/authorize';
@@ -293,6 +298,10 @@ export async function fetchCodexQuota(creds: StoredCredentials): Promise<{
     if (!probe.ok) {
       throw new Error(`ตรวจสอบ API Key ไม่สำเร็จ (HTTP ${probe.status})`);
     }
+    const probeJson = await probe.json().catch(() => null);
+    const liveModels = parseOpenAiModelsList(probeJson);
+    const availableModels =
+      liveModels.length > 0 ? liveModels : getCodexCatalogForPlan('API KEY');
     return {
       credentials: creds,
       credentialsChanged: false,
@@ -302,9 +311,13 @@ export async function fetchCodexQuota(creds: StoredCredentials): Promise<{
             key: 'apikey:status',
             label: 'API Key พร้อมใช้งาน',
             remainingPercent: 100,
-            detail: baseUrl,
+            detail:
+              liveModels.length > 0
+                ? `${baseUrl} · ${liveModels.length} โมเดล`
+                : baseUrl,
           },
         ],
+        availableModels,
         plan: 'API KEY',
         fetchedAt: new Date().toISOString(),
       },
@@ -453,12 +466,15 @@ export async function fetchCodexQuota(creds: StoredCredentials): Promise<{
     creditParts.push(`Reset credits: ${data.rate_limit_reset_credits.available_count}`);
   }
 
+  const plan = formatCodexPlan(data.plan_type);
+
   return {
     credentials: nextCreds,
     credentialsChanged: changed,
     quota: {
       items,
-      plan: formatCodexPlan(data.plan_type),
+      availableModels: getCodexCatalogForPlan(data.plan_type),
+      plan,
       creditsText: creditParts.length > 0 ? creditParts.join(' · ') : null,
       forbidden: false,
       fetchedAt: new Date().toISOString(),
@@ -477,7 +493,7 @@ export async function wakeupCodex(
 }> {
   if (creds.authType === 'api_key' || creds.apiKey) {
     const baseUrl = (creds.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
-    const model = preferredModel?.trim() || 'gpt-4.1-mini';
+    const model = normalizeCodexWakeupModel(preferredModel, true);
     const res = await fetch(`${baseUrl}/responses`, {
       method: 'POST',
       headers: {
@@ -504,7 +520,7 @@ export async function wakeupCodex(
 
   const refreshed = await ensureFreshCodexToken(creds, false);
   const nextCreds = refreshed.credentials;
-  const model = preferredModel?.trim() || 'gpt-5-codex';
+  const model = normalizeCodexWakeupModel(preferredModel, false);
 
   const installationId = randomUUID();
   const sessionId = randomUUID();

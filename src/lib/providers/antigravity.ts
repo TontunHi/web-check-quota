@@ -1,5 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { QuotaItem, QuotaSnapshot, StoredCredentials } from '../types';
+import {
+  buildAntigravityFallbackQuotaItems,
+  extractAntigravityAvailableModels,
+  getAntigravityDirectFallbackModel,
+  normalizeAntigravityWakeupModel,
+  PLATFORM_WAKEUP_DEFAULTS,
+} from '../models';
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -445,27 +452,26 @@ export async function fetchAntigravityQuota(creds: StoredCredentials): Promise<{
     throw new Error(`ดึงโควต้า Antigravity ไม่สำเร็จ (${modelsRes.status})`);
   }
 
+  type RawAntigravityModel = {
+    displayName?: string;
+    model?: string;
+    recommended?: boolean;
+    quotaInfo?: { remainingFraction?: number; resetTime?: string };
+  };
+  type RawAgentModelSort = {
+    groups?: Array<{ modelIds?: string[] | null } | null> | null;
+  };
+
   const modelsData = (await modelsRes.json()) as {
-    models?: Record<
-      string,
-      {
-        displayName?: string;
-        recommended?: boolean;
-        quotaInfo?: { remainingFraction?: number; resetTime?: string };
-      }
-    >;
+    agentModelSorts?: RawAgentModelSort[] | null;
+    models?: Record<string, RawAntigravityModel>;
     payload?: {
-      models?: Record<
-        string,
-        {
-          displayName?: string;
-          recommended?: boolean;
-          quotaInfo?: { remainingFraction?: number; resetTime?: string };
-        }
-      >;
+      agentModelSorts?: RawAgentModelSort[] | null;
+      models?: Record<string, RawAntigravityModel>;
     };
   };
 
+  const availableModels = extractAntigravityAvailableModels(modelsData);
   const items: QuotaItem[] = [];
 
   // 1) Try summary buckets (5h & weekly) first
@@ -505,31 +511,19 @@ export async function fetchAntigravityQuota(creds: StoredCredentials): Promise<{
           }
         }
       }
+      items.sort(
+        (a, b) =>
+          bucketSortPriority(a.key.slice('bucket:'.length)) -
+          bucketSortPriority(b.key.slice('bucket:'.length))
+      );
     }
   } catch {
     // Summary endpoint is optional
   }
 
-  // 2) Add distinct model quotas if summary buckets were empty or to show key models
-  const rawModels = modelsData.payload?.models ?? modelsData.models ?? {};
-  const modelItems: QuotaItem[] = [];
-  for (const [modelId, info] of Object.entries(rawModels)) {
-    const lower = modelId.toLowerCase();
-    if (!info.quotaInfo || (!lower.includes('gemini') && !lower.includes('claude'))) {
-      continue;
-    }
-    const frac = info.quotaInfo.remainingFraction ?? 0;
-    modelItems.push({
-      key: modelId,
-      label: info.displayName?.trim() || modelId,
-      remainingPercent: Math.max(0, Math.min(100, Math.trunc(frac * 100))),
-      resetAt: info.quotaInfo.resetTime || null,
-    });
-  }
-
-  // Use official summary buckets when available; fall back to individual models otherwise
+  // 2) Fall back to grouped canonical models when summary buckets are empty
   if (items.length === 0) {
-    items.push(...modelItems.slice(0, 8));
+    items.push(...buildAntigravityFallbackQuotaItems(availableModels));
   }
 
   return {
@@ -537,6 +531,7 @@ export async function fetchAntigravityQuota(creds: StoredCredentials): Promise<{
     credentialsChanged: changed,
     quota: {
       items,
+      availableModels,
       plan: assist.plan,
       creditsText: assist.creditsText,
       forbidden: false,
@@ -545,13 +540,68 @@ export async function fetchAntigravityQuota(creds: StoredCredentials): Promise<{
   };
 }
 
-function normalizeDirectCloudCodeModel(raw: string): string {
-  const m = raw.trim();
-  if (!m || m.startsWith('gemini-3.8-flash') || m.startsWith('gemini-4-argon')) {
-    return 'gemini-3-flash';
+function bucketSortPriority(bucketId: string): number {
+  const id = bucketId.trim().toLowerCase();
+  if (id === 'gemini-5h' || id === 'gemini:5h') return 0;
+  if (id === 'gemini-weekly' || id === 'gemini:weekly') return 1;
+  if (id === '3p-5h' || id === 'claude:5h') return 2;
+  if (id === '3p-weekly' || id === 'claude:weekly') return 3;
+  if (
+    id === 'argon-5h' ||
+    id === 'argon:5h' ||
+    id === 'gemini-argon-5h' ||
+    (id.includes('argon') && id.includes('5h'))
+  ) {
+    return 4;
   }
-  if (m === 'claude-sonnet-4-5') return 'claude-sonnet-4-6';
-  return m;
+  if (
+    id === 'argon-weekly' ||
+    id === 'argon:weekly' ||
+    id === 'gemini-argon-wtu-weekly' ||
+    (id.includes('argon') && id.includes('weekly'))
+  ) {
+    return 5;
+  }
+  return 6;
+}
+
+async function sendAntigravityStreamWakeup(
+  targetHost: string,
+  accessToken: string,
+  streamProject: string,
+  model: string
+): Promise<Response> {
+  const suffix = randomBytes(3).toString('hex');
+  const nowMs = Date.now();
+  const reqBody = {
+    project: streamProject,
+    requestId: `req_${nowMs}_${suffix}`,
+    model,
+    userAgent: 'antigravity',
+    requestType: 'agent',
+    request: {
+      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+      session_id: `sess_${nowMs}_${suffix}`,
+      systemInstruction: {
+        parts: [
+          {
+            text: 'You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.',
+          },
+        ],
+      },
+      generationConfig: { temperature: 0 },
+    },
+  };
+
+  return fetch(`${targetHost}/v1internal:streamGenerateContent?alt=sse`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'User-Agent': 'antigravity',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(reqBody),
+  });
 }
 
 export async function wakeupAntigravity(
@@ -576,9 +626,9 @@ export async function wakeupAntigravity(
     isGcpTos: assist.isGcpTos ?? nextCreds.isGcpTos,
   };
 
-  const requestedModels = (preferredModel?.trim() || 'gemini-3-flash')
+  const requestedModels = (preferredModel?.trim() || PLATFORM_WAKEUP_DEFAULTS.antigravity)
     .split('+')
-    .map(normalizeDirectCloudCodeModel)
+    .map(normalizeAntigravityWakeupModel)
     .filter(Boolean);
   const uniqueModels = Array.from(new Set(requestedModels));
 
@@ -586,38 +636,33 @@ export async function wakeupAntigravity(
   const replies: string[] = [];
 
   for (const model of uniqueModels) {
-    const suffix = randomBytes(3).toString('hex');
-    const nowMs = Date.now();
+    let label = model;
+    let res = await sendAntigravityStreamWakeup(
+      targetHost,
+      nextCreds.accessToken!,
+      streamProject,
+      model
+    );
 
-    const reqBody = {
-      project: streamProject,
-      requestId: `req_${nowMs}_${suffix}`,
-      model,
-      userAgent: 'antigravity',
-      requestType: 'agent',
-      request: {
-        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-        session_id: `sess_${nowMs}_${suffix}`,
-        systemInstruction: {
-          parts: [
-            {
-              text: 'You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.',
-            },
-          ],
-        },
-        generationConfig: { temperature: 0 },
-      },
-    };
-
-    const res = await fetch(`${targetHost}/v1internal:streamGenerateContent?alt=sse`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${nextCreds.accessToken}`,
-        'User-Agent': 'antigravity',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(reqBody),
-    });
+    if (!res.ok && (res.status === 400 || res.status === 404)) {
+      const fallback = getAntigravityDirectFallbackModel(model);
+      if (fallback !== model) {
+        const retryRes = await sendAntigravityStreamWakeup(
+          targetHost,
+          nextCreds.accessToken!,
+          streamProject,
+          fallback
+        );
+        if (!retryRes.ok) {
+          const errTxt = await retryRes.text().catch(() => '');
+          throw new Error(
+            `HTTP ${retryRes.status} (${fallback}): ${errTxt.slice(0, 140)}`
+          );
+        }
+        res = retryRes;
+        label = `${model} -> ${fallback}`;
+      }
+    }
 
     if (!res.ok) {
       const errTxt = await res.text().catch(() => '');
@@ -660,8 +705,8 @@ export async function wakeupAntigravity(
     }
     replies.push(
       replySnippet.trim()
-        ? `${model}: "${replySnippet.trim().slice(0, 40)}"`
-        : `${model}: OK`
+        ? `${label}: "${replySnippet.trim().slice(0, 40)}"`
+        : `${label}: OK`
     );
   }
 
