@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { decryptJson, encryptJson } from './crypto';
+import { isFreeAccount, isFreePlan } from './models';
 import type {
   PlatformId,
   PublicAccount,
@@ -105,16 +106,19 @@ function mapPublicRow(row: Record<string, unknown>): PublicAccount {
         ? (JSON.parse(quotaRaw) as QuotaSnapshot)
         : null;
 
+  const plan = row.plan ? String(row.plan) : null;
+  const isFree = isFreePlan(plan) || isFreePlan(quota?.plan);
+
   return {
     id: String(row.id),
     platform: row.platform as PlatformId,
     email: String(row.email),
     displayName: row.display_name ? String(row.display_name) : null,
-    plan: row.plan ? String(row.plan) : null,
+    plan,
     groupName: row.group_name ? String(row.group_name) : null,
     tags,
     note: row.note ? String(row.note) : null,
-    wakeupEnabled: Boolean(row.wakeup_enabled),
+    wakeupEnabled: isFree ? false : Boolean(row.wakeup_enabled),
     wakeupModel: row.wakeup_model ? String(row.wakeup_model) : null,
     status: (row.status as PublicAccount['status']) || 'active',
     lastError: row.last_error ? String(row.last_error) : null,
@@ -170,13 +174,14 @@ export async function listAccountsWithSecret(opts?: {
       ? await sql`SELECT * FROM cockpit_accounts WHERE platform = ${opts.platform} ORDER BY created_at ASC`
       : await sql`SELECT * FROM cockpit_accounts ORDER BY created_at ASC`;
 
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const row = r as Record<string, unknown>;
     return {
       ...mapPublicRow(row),
       credentials: decryptJson<StoredCredentials>(String(row.credentials_enc)),
     };
   });
+  return opts?.wakeupOnly ? mapped.filter((acc) => !isFreeAccount(acc)) : mapped;
 }
 
 export async function upsertAccount(input: {
@@ -201,6 +206,9 @@ export async function upsertAccount(input: {
   const tagsJson = JSON.stringify(input.tags ?? []);
   const quotaJson = input.quota ? JSON.stringify(input.quota) : null;
   const refreshedAt = input.quota ? new Date().toISOString() : null;
+  const effectivePlan = input.plan ?? input.quota?.plan ?? null;
+  const isFree = isFreePlan(effectivePlan);
+  const initialWakeupEnabled = isFree ? false : (input.wakeupEnabled ?? false);
 
   const rows = await sql`
     INSERT INTO cockpit_accounts (
@@ -212,7 +220,7 @@ export async function upsertAccount(input: {
       ${input.platform},
       ${input.email.trim().toLowerCase()},
       ${input.displayName ?? null},
-      ${input.plan ?? input.quota?.plan ?? null},
+      ${effectivePlan},
       ${input.groupName ?? null},
       ${tagsJson}::jsonb,
       ${input.note ?? null},
@@ -220,7 +228,7 @@ export async function upsertAccount(input: {
       ${quotaJson}::jsonb,
       ${input.status ?? 'active'},
       ${input.lastError ?? null},
-      ${input.wakeupEnabled ?? false},
+      ${initialWakeupEnabled},
       ${input.wakeupModel ?? null},
       ${refreshedAt},
       NOW()
@@ -238,6 +246,10 @@ export async function upsertAccount(input: {
       quota_snapshot = COALESCE(EXCLUDED.quota_snapshot, cockpit_accounts.quota_snapshot),
       status = EXCLUDED.status,
       last_error = EXCLUDED.last_error,
+      wakeup_enabled = CASE
+        WHEN ${isFree} THEN FALSE
+        ELSE cockpit_accounts.wakeup_enabled
+      END,
       last_refreshed_at = COALESCE(EXCLUDED.last_refreshed_at, cockpit_accounts.last_refreshed_at),
       updated_at = NOW()
     RETURNING
@@ -260,6 +272,8 @@ export async function updateAccountAfterRefresh(input: {
   await ensureSchema();
   const sql = getSql();
   const quotaJson = input.quota ? JSON.stringify(input.quota) : null;
+  const effectivePlan = input.plan ?? input.quota?.plan ?? null;
+  const isFree = isFreePlan(effectivePlan);
 
   const rows = input.credentials
     ? await sql`
@@ -267,9 +281,10 @@ export async function updateAccountAfterRefresh(input: {
         SET
           credentials_enc = ${encryptJson(input.credentials)},
           quota_snapshot = COALESCE(${quotaJson}::jsonb, quota_snapshot),
-          plan = COALESCE(${input.plan ?? input.quota?.plan ?? null}, plan),
+          plan = COALESCE(${effectivePlan}, plan),
           status = ${input.status},
           last_error = ${input.lastError},
+          wakeup_enabled = CASE WHEN ${isFree} THEN FALSE ELSE wakeup_enabled END,
           last_refreshed_at = CASE WHEN ${quotaJson}::jsonb IS NOT NULL THEN NOW() ELSE last_refreshed_at END,
           updated_at = NOW()
         WHERE id = ${input.id}
@@ -282,9 +297,10 @@ export async function updateAccountAfterRefresh(input: {
         UPDATE cockpit_accounts
         SET
           quota_snapshot = COALESCE(${quotaJson}::jsonb, quota_snapshot),
-          plan = COALESCE(${input.plan ?? input.quota?.plan ?? null}, plan),
+          plan = COALESCE(${effectivePlan}, plan),
           status = ${input.status},
           last_error = ${input.lastError},
+          wakeup_enabled = CASE WHEN ${isFree} THEN FALSE ELSE wakeup_enabled END,
           last_refreshed_at = CASE WHEN ${quotaJson}::jsonb IS NOT NULL THEN NOW() ELSE last_refreshed_at END,
           updated_at = NOW()
         WHERE id = ${input.id}
@@ -318,8 +334,11 @@ export async function updateAccountMeta(
   const nextGroup = patch.groupName !== undefined ? patch.groupName : current.groupName;
   const nextTags = JSON.stringify(patch.tags !== undefined ? patch.tags : current.tags);
   const nextNote = patch.note !== undefined ? patch.note : current.note;
-  const nextWakeEnabled =
-    patch.wakeupEnabled !== undefined ? patch.wakeupEnabled : current.wakeupEnabled;
+  const nextWakeEnabled = isFreeAccount(current)
+    ? false
+    : patch.wakeupEnabled !== undefined
+      ? patch.wakeupEnabled
+      : current.wakeupEnabled;
   const nextWakeModel =
     patch.wakeupModel !== undefined ? patch.wakeupModel : current.wakeupModel;
 

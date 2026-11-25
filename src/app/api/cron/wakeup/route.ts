@@ -7,6 +7,7 @@ import {
   updateAccountAfterRefresh,
 } from '@/lib/db';
 import { PLATFORM_META } from '@/lib/format';
+import { isFreeAccount } from '@/lib/models';
 import { computeAccountStatus, runPlatformWakeup } from '@/lib/providers';
 
 async function handleScheduledWakeup(req: NextRequest) {
@@ -14,7 +15,9 @@ async function handleScheduledWakeup(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized cron request' }, { status: 401 });
   }
 
-  const enabled = await listAccountsWithSecret({ wakeupOnly: true });
+  const enabled = (await listAccountsWithSecret({ wakeupOnly: true })).filter(
+    (acc) => !isFreeAccount(acc)
+  );
   let triggered = 0;
   let failed = 0;
 

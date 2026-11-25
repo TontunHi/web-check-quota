@@ -9,6 +9,7 @@ import {
   updateAccountAfterRefresh,
 } from '@/lib/db';
 import { PLATFORM_META } from '@/lib/format';
+import { isFreeAccount } from '@/lib/models';
 import { computeAccountStatus, runPlatformWakeup } from '@/lib/providers';
 
 export async function GET(req: NextRequest) {
@@ -23,7 +24,9 @@ export async function POST(req: NextRequest) {
   const unauth = await requireApiAuth(req);
   if (unauth) return unauth;
 
-  const enabled = await listAccountsWithSecret({ wakeupOnly: true });
+  const enabled = (await listAccountsWithSecret({ wakeupOnly: true })).filter(
+    (acc) => !isFreeAccount(acc)
+  );
   let successCount = 0;
   let failCount = 0;
 

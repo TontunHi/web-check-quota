@@ -55,11 +55,21 @@ export function getAccountFamilyRemainingPercent(
 
   if (account.platform === 'antigravity') {
     const keyLower = group.groupKey.toLowerCase();
+    if (keyLower.includes('hydrogen')) {
+      const hydrogenMatched = quotaItems.filter((item) =>
+        `${item.key} ${item.label}`.toLowerCase().includes('hydrogen')
+      );
+      if (hydrogenMatched.length > 0) {
+        return Math.min(...hydrogenMatched.map((item) => item.remainingPercent));
+      }
+    }
     const matched = quotaItems.filter((item) => {
       const text = `${item.key} ${item.label}`.toLowerCase();
       if (keyLower.includes('argon')) return text.includes('argon');
       if (group.family === 'claude') return text.includes('3p') || text.includes('claude');
-      if (group.family === 'gemini') return text.includes('gemini') && !text.includes('argon');
+      if (group.family === 'gemini') {
+        return text.includes('gemini') && !text.includes('argon') && !text.includes('hydrogen');
+      }
       return false;
     });
     if (matched.length === 0) return null;

@@ -245,6 +245,9 @@ function formatBucketLabel(bucketId: string, displayName?: string): string {
   if (id.startsWith('3p') || id.startsWith('claude')) {
     return period ? `Claude / 3P (${period})` : displayName || bucketId;
   }
+  if (id.includes('hydrogen')) {
+    return period ? `Gemini Hydrogen (${period})` : displayName || bucketId;
+  }
   if (id.includes('argon')) {
     return period ? `Gemini Argon (${period})` : displayName || bucketId;
   }
@@ -562,7 +565,13 @@ function bucketSortPriority(bucketId: string): number {
   ) {
     return 5;
   }
-  return 6;
+  if (id.includes('hydrogen') && id.includes('5h')) {
+    return 6;
+  }
+  if (id.includes('hydrogen') && id.includes('weekly')) {
+    return 7;
+  }
+  return 8;
 }
 
 async function sendAntigravityStreamWakeup(

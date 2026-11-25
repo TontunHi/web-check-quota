@@ -36,6 +36,34 @@ const CODEX_EXTENDED_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'
 const ANTIGRAVITY_CANONICAL_MODELS: readonly CanonicalModelEntry[] = [
   {
     platform: 'antigravity',
+    id: 'gemini-4-hydrogen-high',
+    displayName: 'Gemini 4 Hydrogen (High)',
+    family: 'gemini',
+    groupKey: 'gemini-4-hydrogen',
+    groupLabel: 'Gemini 4 Hydrogen',
+    effortLabel: 'High',
+    aliases: ['gemini-4-hydrogen'],
+  },
+  {
+    platform: 'antigravity',
+    id: 'gemini-4-hydrogen-medium',
+    displayName: 'Gemini 4 Hydrogen (Medium)',
+    family: 'gemini',
+    groupKey: 'gemini-4-hydrogen',
+    groupLabel: 'Gemini 4 Hydrogen',
+    effortLabel: 'Medium',
+  },
+  {
+    platform: 'antigravity',
+    id: 'gemini-4-hydrogen-low',
+    displayName: 'Gemini 4 Hydrogen (Low)',
+    family: 'gemini',
+    groupKey: 'gemini-4-hydrogen',
+    groupLabel: 'Gemini 4 Hydrogen',
+    effortLabel: 'Low',
+  },
+  {
+    platform: 'antigravity',
     id: 'gemini-4-argon-high',
     displayName: 'Gemini 4 Argon (High)',
     family: 'gemini',
@@ -364,18 +392,21 @@ export const CANONICAL_MODELS_BY_PLATFORM: Record<PlatformId, readonly Canonical
 };
 
 export const PLATFORM_WAKEUP_DEFAULTS: Record<PlatformId, string> = {
-  antigravity: 'gemini-3.8-flash-high',
+  antigravity: 'gemini-4-hydrogen-high',
   codex: 'gpt-5.6-luna',
   claude: 'claude-haiku-4-5-20251001',
 };
 
 export const PLATFORM_WAKEUP_PRESETS: Record<PlatformId, string[]> = {
   antigravity: [
+    'gemini-4-hydrogen-high',
+    'gemini-4-hydrogen-medium',
+    'gemini-4-hydrogen-low',
     'gemini-3.8-flash-high',
     'gemini-4-argon-high',
     'claude-sonnet-5-5-high',
     'claude-opus-5-5-high',
-    'gemini-3.8-flash-high + claude-sonnet-5-5-high',
+    'gemini-4-hydrogen-high + claude-sonnet-5-5-high',
     'gemini-3-flash',
     'claude-sonnet-4-6',
     'claude-opus-4-6-thinking',
@@ -538,8 +569,14 @@ function toCatalogAvailableModel(entry: CanonicalModelEntry): AvailableModel {
   };
 }
 
-function isFreePlan(plan?: string | null): boolean {
+export function isFreePlan(plan?: string | null): boolean {
   return Boolean(plan && plan.toLowerCase().includes('free'));
+}
+
+export function isFreeAccount(
+  account: Pick<PublicAccount, 'plan' | 'quota'>
+): boolean {
+  return isFreePlan(account.plan) || isFreePlan(account.quota?.plan);
 }
 
 export function getModelDisplayLabel(modelId: string, platform?: PlatformId): string | null {
@@ -998,42 +1035,136 @@ function sanitizeLegacyAntigravityItems(
     .map((entry) => entry.model);
 }
 
+function isModelQuotaExhausted(
+  account: PublicAccount,
+  model: AvailableModel,
+  canonical?: CanonicalModelEntry
+): boolean {
+  if (
+    typeof model.remainingPercent === 'number' &&
+    Number.isFinite(model.remainingPercent)
+  ) {
+    return model.remainingPercent <= 0;
+  }
+
+  const items = account.quota?.items ?? [];
+  if (items.length === 0) return false;
+
+  if (account.platform === 'antigravity') {
+    const idLower = model.id.toLowerCase();
+    const family = canonical?.family ?? model.family;
+    const matched = items.filter((item) => {
+      const text = `${item.key} ${item.label}`.toLowerCase();
+      if (idLower.includes('hydrogen')) {
+        return text.includes('hydrogen');
+      }
+      if (idLower.includes('argon')) {
+        return text.includes('argon');
+      }
+      if (family === 'claude') {
+        return text.includes('3p') || text.includes('claude');
+      }
+      if (family === 'gemini') {
+        return (
+          text.includes('gemini') &&
+          !text.includes('argon') &&
+          !text.includes('hydrogen')
+        );
+      }
+      return false;
+    });
+    if (matched.length > 0 && matched.every((item) => item.remainingPercent <= 0)) {
+      return true;
+    }
+    return false;
+  }
+
+  if (account.platform === 'codex') {
+    const windows = items.filter((item) => item.key.startsWith('window:'));
+    return windows.length > 0 && windows.some((item) => item.remainingPercent <= 0);
+  }
+
+  const windows = items.filter((item) => item.key.startsWith('window:'));
+  if (windows.length === 0) return false;
+
+  const idLower = model.id.toLowerCase();
+  if (idLower.includes('opus')) {
+    const opusWindow = windows.find((item) => item.key === 'window:7d_opus');
+    if (opusWindow && opusWindow.remainingPercent <= 0) return true;
+  }
+  if (idLower.includes('sonnet')) {
+    const sonnetWindow = windows.find((item) => item.key === 'window:7d_sonnet');
+    if (sonnetWindow && sonnetWindow.remainingPercent <= 0) return true;
+  }
+  const coreWindows = windows.filter(
+    (item) => item.key === 'window:5h' || item.key === 'window:7d'
+  );
+  return coreWindows.length > 0 && coreWindows.some((item) => item.remainingPercent <= 0);
+}
+
+function isUsableAccountModel(
+  account: PublicAccount,
+  model: AvailableModel,
+  plan?: string | null
+): boolean {
+  if (
+    account.platform === 'antigravity' &&
+    isBlacklistedAntigravityModel(model.id, model.displayName)
+  ) {
+    return false;
+  }
+  const canonical = resolveCanonical(account.platform, model.id, model.displayName);
+  if (isFreePlan(plan) && canonical?.paidOnly) {
+    return false;
+  }
+  if (isModelQuotaExhausted(account, model, canonical)) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveAccountAvailableModels(account: PublicAccount): {
   models: AvailableModel[];
   isLive: boolean;
 } {
+  const plan = account.plan ?? account.quota?.plan ?? null;
   const storedModels = account.quota?.availableModels;
+
+  if (account.status === 'forbidden' || account.quota?.forbidden) {
+    return {
+      models: [],
+      isLive: Boolean(storedModels?.some((m) => m.source === 'live')),
+    };
+  }
+
   if (storedModels && storedModels.length > 0) {
-    const models =
-      account.platform === 'antigravity'
-        ? storedModels.filter((m) => !isBlacklistedAntigravityModel(m.id, m.displayName))
-        : storedModels;
-    if (models.length > 0) {
-      return {
-        models,
-        isLive: models.some((m) => m.source === 'live'),
-      };
-    }
+    return {
+      models: storedModels.filter((m) => isUsableAccountModel(account, m, plan)),
+      isLive: storedModels.some((m) => m.source === 'live'),
+    };
   }
 
   if (account.platform === 'antigravity' && account.quota?.items?.length) {
     const nonBucket = account.quota.items.filter((i) => !isBucketQuotaItem(i));
     if (nonBucket.length > 0) {
-      const sanitized = sanitizeLegacyAntigravityItems(nonBucket);
-      if (sanitized.length > 0) {
-        return { models: sanitized, isLive: true };
-      }
+      const sanitized = sanitizeLegacyAntigravityItems(nonBucket).filter((m) =>
+        isUsableAccountModel(account, m, plan)
+      );
+      return { models: sanitized, isLive: true };
     }
   }
 
-  const plan = account.plan ?? account.quota?.plan ?? null;
-  if (account.platform === 'antigravity') {
-    return { models: getAntigravityCatalog(), isLive: false };
-  }
-  if (account.platform === 'codex') {
-    return { models: getCodexCatalogForPlan(plan), isLive: false };
-  }
-  return { models: getClaudeCatalogForPlan(plan), isLive: false };
+  const catalog =
+    account.platform === 'antigravity'
+      ? getAntigravityCatalog()
+      : account.platform === 'codex'
+        ? getCodexCatalogForPlan(plan)
+        : getClaudeCatalogForPlan(plan);
+
+  return {
+    models: catalog.filter((m) => isUsableAccountModel(account, m, plan)),
+    isLive: false,
+  };
 }
 
 export function getDisplayQuotaItems(account: PublicAccount): QuotaItem[] {

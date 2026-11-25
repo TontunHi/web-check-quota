@@ -6,6 +6,7 @@ import type { PublicAccount } from '@/lib/types';
 import { PLATFORM_META } from '@/lib/format';
 import {
   getModelDisplayLabel,
+  isFreeAccount,
   isLegacyWakeupModel,
   PLATFORM_WAKEUP_PRESETS,
   resolveAccountAvailableModels,
@@ -24,11 +25,14 @@ export function EditAccountModal({
   onSaved,
 }: EditAccountModalProps) {
   const meta = PLATFORM_META[account.platform];
+  const isFree = isFreeAccount(account);
   const [displayName, setDisplayName] = useState(account.displayName ?? '');
   const [groupName, setGroupName] = useState(account.groupName ?? '');
   const [tagsInput, setTagsInput] = useState(account.tags.join(', '));
   const [note, setNote] = useState(account.note ?? '');
-  const [wakeupEnabled, setWakeupEnabled] = useState(account.wakeupEnabled);
+  const [wakeupEnabled, setWakeupEnabled] = useState(
+    isFree ? false : account.wakeupEnabled
+  );
   const [wakeupModel, setWakeupModel] = useState(
     account.wakeupModel || meta.defaultWakeupModel
   );
@@ -81,7 +85,7 @@ export function EditAccountModal({
           groupName: groupName.trim() || null,
           tags,
           note: note.trim() || null,
-          wakeupEnabled,
+          wakeupEnabled: isFree ? false : wakeupEnabled,
           wakeupModel: wakeupModel.trim() || meta.defaultWakeupModel,
         }),
       });
@@ -162,19 +166,28 @@ export function EditAccountModal({
         </div>
 
         <div className="pt-3 border-t border-white/[0.06] space-y-3">
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <label
+            className={`flex items-center justify-between gap-3 ${
+              isFree ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+            }`}
+          >
             <div>
               <span className="block text-[13px] text-[#f3f4f6]">
                 เปิดใช้งาน Wake-up อัตโนมัติ
               </span>
               <span className="block text-[11px] text-[#8b93a1]">
-                รวมบัญชีนี้เมื่อสั่งปลุกทั้งหมดหรือรันผ่าน Cron
+                {isFree
+                  ? 'บัญชีประเภท FREE ไม่ต้องเปิด Wake-up อัตโนมัติ (ข้ามใน Cron และสั่งปลุกทั้งหมด)'
+                  : 'รวมบัญชีนี้เมื่อสั่งปลุกทั้งหมดหรือรันผ่าน Cron'}
               </span>
             </div>
             <input
               type="checkbox"
-              checked={wakeupEnabled}
-              onChange={(e) => setWakeupEnabled(e.target.checked)}
+              disabled={isFree}
+              checked={isFree ? false : wakeupEnabled}
+              onChange={(e) => {
+                if (!isFree) setWakeupEnabled(e.target.checked);
+              }}
               className={`h-4 w-4 accent-[#34d399] rounded ${FOCUS_RING}`}
             />
           </label>

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import type { PlatformId, PublicAccount } from '@/lib/types';
 import { classifyAccountHealth, PLATFORM_META } from '@/lib/format';
-import { resolveAccountAvailableModels } from '@/lib/models';
+import { isFreeAccount, resolveAccountAvailableModels } from '@/lib/models';
 import { AccountCard } from './AccountCard';
 import { AccountTable } from './AccountTable';
 import { AddAccountModal } from './AddAccountModal';
@@ -112,7 +112,7 @@ export function DashboardClient({ initialAccounts }: DashboardClientProps) {
 
     for (const a of accounts) {
       byPlatform[a.platform]++;
-      if (a.wakeupEnabled) wakeupCount++;
+      if (a.wakeupEnabled && !isFreeAccount(a)) wakeupCount++;
       const health = classifyAccountHealth(a);
       if (health === 'healthy') healthy++;
       else if (health === 'low') low++;
@@ -136,7 +136,7 @@ export function DashboardClient({ initialAccounts }: DashboardClientProps) {
       if (platformFilter !== 'all' && a.platform !== platformFilter) return false;
       if (groupFilter !== 'all' && (a.groupName ?? '') !== groupFilter) return false;
       if (selectedTag && !a.tags.includes(selectedTag)) return false;
-      if (wakeupOnlyFilter && !a.wakeupEnabled) return false;
+      if (wakeupOnlyFilter && (!a.wakeupEnabled || isFreeAccount(a))) return false;
 
       if (statusFilter !== 'all') {
         const health = classifyAccountHealth(a);

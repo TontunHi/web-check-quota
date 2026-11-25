@@ -18,6 +18,7 @@ import {
 import {
   getModelDisplayLabel,
   groupModelsForDisplay,
+  isFreeAccount,
   resolveAccountAvailableModels,
 } from '@/lib/models';
 import {
@@ -78,10 +79,9 @@ export function AccountTable({
                 soonestResetMs !== null ? new Date(soonestResetMs).toISOString() : null;
               const exactResetTitle = formatExactResetTime(soonestResetIso) || undefined;
 
+              const isFree = isFreeAccount(account);
               const { models, isLive } = resolveAccountAvailableModels(account);
               const groups = groupModelsForDisplay(models);
-              const visibleGroups = groups.slice(0, 2);
-              const overflowCount = Math.max(0, groups.length - visibleGroups.length);
 
               const wakeupModel = account.wakeupModel || meta.defaultWakeupModel;
               const wakeupFriendly = getModelDisplayLabel(wakeupModel, account.platform);
@@ -163,39 +163,44 @@ export function AccountTable({
 
                   {/* Usable Models Column */}
                   <td className="py-3 px-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        title={isLive ? 'ข้อมูลรุ่นโมเดลสดจากบัญชี' : 'อ้างอิงจากแคตตาล็อกแผน'}
-                        className="text-[11px] font-mono tabular-nums text-[#8b93a1]"
-                      >
-                        {models.length}
+                    {models.length === 0 ? (
+                      <span className="text-[12px] text-[#8b93a1]">
+                        ไม่มีโมเดลที่ใช้ได้
                       </span>
-                      {visibleGroups.map((group) => {
-                        const familyMeta = MODEL_FAMILY_META[group.family];
-                        return (
-                          <span
-                            key={group.groupKey}
-                            className="inline-flex items-center gap-1 text-[11px] text-[#b4bac4] bg-[#0f1012] border border-white/[0.08] px-2 py-0.5 rounded"
-                          >
-                            <span
-                              className="w-2 h-2 rounded-full shrink-0"
-                              style={{ backgroundColor: familyMeta.dotColor }}
-                            />
-                            <span className="truncate max-w-[120px]">{group.label}</span>
-                          </span>
-                        );
-                      })}
-                      {overflowCount > 0 && (
-                        <span className="text-[11px] font-mono tabular-nums text-[#8b93a1] bg-[#1c1f24] border border-white/[0.06] px-2 py-0.5 rounded">
-                          +{overflowCount}
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          title={isLive ? 'ข้อมูลรุ่นโมเดลสดจากบัญชี' : 'อ้างอิงจากแคตตาล็อกแผน'}
+                          className="text-[11px] font-mono tabular-nums text-[#8b93a1]"
+                        >
+                          {models.length}
                         </span>
-                      )}
-                    </div>
+                        {groups.map((group) => {
+                          const familyMeta = MODEL_FAMILY_META[group.family];
+                          return (
+                            <span
+                              key={group.groupKey}
+                              className="inline-flex items-center gap-1 text-[11px] text-[#b4bac4] bg-[#0f1012] border border-white/[0.08] px-2 py-0.5 rounded"
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: familyMeta.dotColor }}
+                              />
+                              <span className="truncate max-w-[140px]">{group.label}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </td>
 
                   {/* Wake-up Column */}
                   <td className="py-3 px-4">
-                    {account.wakeupEnabled ? (
+                    {isFree ? (
+                      <span className="inline-flex items-center text-[11px] text-[#8b93a1] bg-[#0f1012] border border-white/[0.06] px-2 py-0.5 rounded">
+                        ปิด (FREE)
+                      </span>
+                    ) : account.wakeupEnabled ? (
                       <span
                         title={`${wakeupModel}${wakeupFriendly ? ` (${wakeupFriendly})` : ''}`}
                         className="inline-flex items-center gap-1 text-[11px] font-mono text-[#34d399] bg-[#34d399]/[0.08] border border-[#34d399]/20 px-2 py-0.5 rounded max-w-[180px]"

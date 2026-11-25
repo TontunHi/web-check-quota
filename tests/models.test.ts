@@ -13,6 +13,7 @@ import {
   getModelDisplayLabel,
   groupModelsForDisplay,
   isBlacklistedAntigravityModel,
+  isFreeAccount,
   isLegacyWakeupModel,
   isRetiredCodexModel,
   normalizeAntigravityWakeupModel,
@@ -437,6 +438,7 @@ test('classifyAccountHealth, format helpers, labels, and legacy wakeup detection
   assert.equal(getModelDisplayLabel('claude-opus-4-6', 'antigravity'), 'Claude Opus 4.6 (Thinking)');
   assert.equal(getModelDisplayLabel('unknown-custom-slug'), null);
 
+  assert.equal(normalizeAntigravityWakeupModel('gemini-4-hydrogen'), 'gemini-4-hydrogen-high');
   assert.equal(normalizeAntigravityWakeupModel('gemini-3.8-flash'), 'gemini-3.8-flash-high');
   assert.equal(normalizeAntigravityWakeupModel('gemini-4-argon'), 'gemini-4-argon-high');
   assert.equal(normalizeAntigravityWakeupModel('claude-sonnet-5-5'), 'claude-sonnet-5-5-high');
@@ -446,19 +448,23 @@ test('classifyAccountHealth, format helpers, labels, and legacy wakeup detection
   assert.equal(normalizeAntigravityWakeupModel('claude-opus-4-5-thinking'), 'claude-opus-4-6-thinking');
   assert.equal(getAntigravityDirectFallbackModel('claude-sonnet-5-5-high'), 'claude-sonnet-4-6');
   assert.equal(getAntigravityDirectFallbackModel('gemini-3.8-flash-high'), 'gemini-3-flash');
+  assert.equal(getModelDisplayLabel('gemini-4-hydrogen-high'), 'Gemini 4 Hydrogen (High)');
 
   assert.equal(isLegacyWakeupModel('codex', 'gpt-5-codex'), true);
   assert.equal(isLegacyWakeupModel('codex', 'gpt-5.6-luna'), false);
   assert.equal(isLegacyWakeupModel('antigravity', 'gemini-2.5-pro'), true);
   assert.equal(isLegacyWakeupModel('antigravity', 'gemini-3.8-flash'), true);
   assert.equal(isLegacyWakeupModel('antigravity', 'gemini-3.8-flash-high'), false);
+  assert.equal(isLegacyWakeupModel('antigravity', 'gemini-4-hydrogen-high'), false);
   assert.equal(isLegacyWakeupModel('claude', 'claude-sonnet-4-20250514'), true);
   assert.equal(isLegacyWakeupModel('claude', 'claude-sonnet-4-5'), true);
   assert.equal(isLegacyWakeupModel('claude', 'claude-sonnet-4-6'), false);
 
+  assert.equal(PLATFORM_WAKEUP_DEFAULTS.antigravity, 'gemini-4-hydrogen-high');
   assert.equal(PLATFORM_META.antigravity.defaultWakeupModel, PLATFORM_WAKEUP_DEFAULTS.antigravity);
   assert.deepEqual(PLATFORM_META.codex.wakeupModels, PLATFORM_WAKEUP_PRESETS.codex);
-  assert.equal(getAntigravityCatalog().length, 18);
+  assert.equal(getAntigravityCatalog().length, 21);
+  assert.ok(getAntigravityCatalog().some((m) => m.id === 'gemini-4-hydrogen-high'));
 
   const resetAcc = makeAccount({
     platform: 'codex',
@@ -661,4 +667,81 @@ test('providers integrate model extraction, bucket sorting, and wakeup fallback/
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('resolveAccountAvailableModels filters exhausted/forbidden models and isFreeAccount detects FREE tier', () => {
+  const exhaustedAndUsable = makeAccount({
+    platform: 'antigravity',
+    plan: 'PRO',
+    quota: makeQuota({
+      plan: 'PRO',
+      availableModels: [
+        {
+          id: 'gemini-4-hydrogen-high',
+          displayName: 'Gemini 4 Hydrogen (High)',
+          family: 'gemini',
+          remainingPercent: 80,
+          source: 'live',
+        },
+        {
+          id: 'gemini-4-argon-high',
+          displayName: 'Gemini 4 Argon (High)',
+          family: 'gemini',
+          remainingPercent: 0,
+          source: 'live',
+        },
+      ],
+    }),
+  });
+  assert.deepEqual(
+    resolveAccountAvailableModels(exhaustedAndUsable).models.map((m) => m.id),
+    ['gemini-4-hydrogen-high']
+  );
+
+  const allExhausted = makeAccount({
+    platform: 'antigravity',
+    plan: 'PRO',
+    quota: makeQuota({
+      plan: 'PRO',
+      availableModels: [
+        {
+          id: 'gemini-4-hydrogen-high',
+          displayName: 'Gemini 4 Hydrogen (High)',
+          family: 'gemini',
+          remainingPercent: 0,
+          source: 'live',
+        },
+      ],
+    }),
+  });
+  assert.equal(resolveAccountAvailableModels(allExhausted).models.length, 0);
+  assert.equal(resolveAccountAvailableModels(allExhausted).isLive, true);
+
+  const forbiddenAcc = makeAccount({
+    platform: 'antigravity',
+    status: 'forbidden',
+    plan: 'PRO',
+    quota: makeQuota({ forbidden: true }),
+  });
+  assert.equal(resolveAccountAvailableModels(forbiddenAcc).models.length, 0);
+
+  const claudeOpusExhausted = makeAccount({
+    platform: 'claude',
+    plan: 'MAX 20X',
+    quota: makeQuota({
+      plan: 'MAX 20X',
+      items: [
+        { key: 'window:5h', label: '5h', remainingPercent: 80 },
+        { key: 'window:7d', label: '7d', remainingPercent: 60 },
+        { key: 'window:7d_opus', label: '7d Opus', remainingPercent: 0 },
+      ],
+    }),
+  });
+  const claudeModels = resolveAccountAvailableModels(claudeOpusExhausted).models.map((m) => m.id);
+  assert.equal(claudeModels.some((id) => id.includes('opus')), false);
+  assert.equal(claudeModels.includes('claude-sonnet-4-6'), true);
+
+  assert.equal(isFreeAccount(makeAccount({ plan: 'FREE' })), true);
+  assert.equal(isFreeAccount(makeAccount({ plan: null, quota: makeQuota({ plan: 'free-tier' }) })), true);
+  assert.equal(isFreeAccount(makeAccount({ plan: 'PRO' })), false);
 });

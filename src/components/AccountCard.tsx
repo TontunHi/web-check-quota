@@ -23,6 +23,7 @@ import {
   getDisplayQuotaItems,
   getModelDisplayLabel,
   groupModelsForDisplay,
+  isFreeAccount,
   resolveAccountAvailableModels,
 } from '@/lib/models';
 import {
@@ -60,14 +61,11 @@ export function AccountCard({
   const meta = PLATFORM_META[account.platform];
   const items = getDisplayQuotaItems(account);
   const isForbidden = account.status === 'forbidden' || Boolean(account.quota?.forbidden);
+  const isFree = isFreeAccount(account);
 
   const { models, isLive } = resolveAccountAvailableModels(account);
   const modelGroups = groupModelsForDisplay(models);
-  const canExpandModels =
-    modelGroups.length > 4 ||
-    modelGroups.some((g) => g.models.length > 1 || g.efforts.length > 0);
-  const collapsedGroups = modelGroups.slice(0, 4);
-  const hiddenGroupCount = Math.max(0, modelGroups.length - collapsedGroups.length);
+  const canExpandModels = models.length > 0;
 
   const wakeupModel = account.wakeupModel || meta.defaultWakeupModel;
   const wakeupFriendly = getModelDisplayLabel(wakeupModel, account.platform);
@@ -107,7 +105,7 @@ export function AccountCard({
             )}
           </div>
 
-          {account.wakeupEnabled && (
+          {account.wakeupEnabled && !isFree && (
             <span
               className="shrink-0 inline-flex items-center gap-1 text-[11px] font-mono text-[#34d399] bg-[#34d399]/[0.08] border border-[#34d399]/20 px-2 py-0.5 rounded max-w-[148px]"
               title={`เปิดปลุกอัตโนมัติ: ${wakeupModel}${
@@ -226,32 +224,37 @@ export function AccountCard({
             )}
           </div>
 
-          {!modelsExpanded ? (
+          {models.length === 0 ? (
+            <div className="text-[12px] text-[#8b93a1]">
+              ไม่มีโมเดลที่ใช้งานได้
+            </div>
+          ) : !modelsExpanded ? (
             <div className="flex flex-wrap items-center gap-2">
-              {collapsedGroups.map((group) => {
+              {modelGroups.map((group) => {
                 const familyMeta = MODEL_FAMILY_META[group.family];
                 return (
                   <span
                     key={group.groupKey}
-                    className="inline-flex items-center gap-2 text-[11px] text-[#b4bac4] bg-[#0f1012] border border-white/[0.08] px-2 py-0.5 rounded"
+                    className="inline-flex items-center gap-1.5 text-[11px] text-[#b4bac4] bg-[#0f1012] border border-white/[0.08] px-2 py-0.5 rounded"
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
                       style={{ backgroundColor: familyMeta.dotColor }}
                     />
                     <span>{group.label}</span>
+                    {typeof group.remainingPercent === 'number' &&
+                      Number.isFinite(group.remainingPercent) && (
+                        <span
+                          className={`font-mono tabular-nums ${quotaTextColor(
+                            group.remainingPercent
+                          )}`}
+                        >
+                          {Math.round(group.remainingPercent)}%
+                        </span>
+                      )}
                   </span>
                 );
               })}
-              {hiddenGroupCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setModelsExpanded(true)}
-                  className={`text-[11px] font-mono tabular-nums text-[#8b93a1] hover:text-[#f3f4f6] bg-[#1c1f24] border border-white/[0.06] px-2 py-0.5 rounded transition-colors ${FOCUS_RING}`}
-                >
-                  +{hiddenGroupCount} อื่นๆ
-                </button>
-              )}
             </div>
           ) : (
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
